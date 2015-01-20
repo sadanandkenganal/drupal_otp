@@ -1,0 +1,741 @@
+<?php
+/**
+ * OTP provides an additional layer of security to the login process by
+ * requiring users to enter a randomly generated one-time password (OTP)
+ * in addition to their regular Drupal password.
+ */
+
+/**
+ * Implements hook_perm().
+ * Create permission for administering OTP settings.
+ */
+function otp_permission() {
+  $perm = array(
+    'administer otp' => array(
+      'title' => t('Administer OTP Settings'),
+    ),
+    'login links' => array(
+      'title' => t('Show Login Links'),
+    ),
+  );
+  return $perm;
+}
+
+/**
+ * Implements hook_menu().
+ */
+function otp_menu() {
+  // OTP settings  
+  $items['admin/config/people/master_admin_carlabs'] = array(
+    'title' => 'Email Set UP (Master Admin Carlabs)',
+    'description' => 'Set an email id for master admin',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('email_settings_form'),    
+    'access arguments' => array('administer otp'),
+  );
+
+  // OTP settings  
+  $items['admin/config/people/otp'] = array(
+    'title' => 'One-Time Password',
+    'description' => 'Manage One-Time Password settings.',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('otp_settings_form'),    
+    'access arguments' => array('administer otp'),
+  );      
+  
+  // OTP Login
+  $items['company/login'] = array(
+    'title' => 'Company Login',
+    'description' => 'Login using a one time password.',  
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('otp_login_form'),
+    'access arguments' => array('login links'),
+  );
+
+  // OTP Login
+  $items['industry/login'] = array(
+    'title' => 'Industry Login',
+    'description' => 'Login using a one time password.',  
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('otp_login_form'),    
+    'access arguments' => array('login links'),
+  );
+
+  // OTP Login
+  $items['research/login'] = array(
+    'title' => 'Research Login',
+    'description' => 'Login using a one time password.',  
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('otp_login_form'),    
+    'access arguments' => array('login links'),
+  );
+
+  // OTP Login
+  $items['academia/login'] = array(
+    'title' => 'Academic Login',
+    'description' => 'Login using a one time password.',  
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('otp_login_form'),    
+    'access arguments' => array('login links'),
+  );
+
+  return $items;
+}
+
+/**
+ * Implements hook_form_alter().
+ */
+function otp_form_alter(&$form, $form_state, $form_id) {
+  switch ($form_id) {
+    // Add OTP validation to the default login validation process
+    case 'user_login':
+    case 'user_login_block':
+      // Insert OTP validation function right after 'user_login_name_validate'
+      $validate_functions = $form['#validate'];
+      $key = array_search('user_login_name_validate', $validate_functions);
+      array_splice($validate_functions, $key+1, 0, 'otp_default_login_role_validate');
+      $form['#validate'] = $validate_functions;
+      
+      // Add an OTP Login hyperlink to the user login block.
+      if ($form_id == 'user_login_block') {
+        $items = array();
+        if (variable_get('user_register', USER_REGISTER_VISITORS_ADMINISTRATIVE_APPROVAL)) {
+          $items[] = l(t('Create new account'), 'user/register', array('attributes' => array('title' => t('Create a new user account.'))));
+        }
+        $items[] = l(t('Request new password'), 'user/password', array('attributes' => array('title' => t('Request new password via e-mail.'))));
+        $items[] = l(t('OTP Log in'), 'user/otp', array('attributes' => array('title' => t('Log in using a one-time password.'))));
+        $form['links'] = array('#markup' => theme('item_list', array('items' => $items)));
+      }
+      break;
+
+    // Display otp_user_contact field on the user form only if an otp role is selected    case 'user_profile_form':
+    // NOTE: requires upgrade to Drupal 7.14 or higher (http://drupal.org/node/735528) due to OR issue in form #state  
+    case 'user_register_form':
+      // If logged in user have permission to set user roles, then consider all available roles. Otherwise, just consider roles assigned to the user  
+      if ($form['account']['roles']['#access']) {
+        $roles = $form['account']['roles']['#options'];    // logged in user WITH "administer user" permission    
+      }
+      else {
+        $roles = $form['#user']->roles;                    // logged in user WITHOUT "administer user" permission 
+      }
+
+      // Set up #states conditions to display the otp contact field
+      $states_conditions = array('or');
+      foreach ($roles as $rid => $name) {
+        $role_id = 'otp_role_id_' . $rid;        
+        if (variable_get($role_id, 0)) {
+          $input_name = ':input[name="roles[' . $rid . ']"]';
+          $states_conditions[] = array($input_name => array('checked' => TRUE));
+        } 
+      }
+      
+      // If OTP roles were enabled, then set otp_user_contact field attributes
+      if (count($states_conditions) > 1) {
+        $form['otp_user_contact']['#states'] = array(
+          'visible' => $states_conditions,
+        );
+        $form['otp_user_contact']['#weight'] = $form['account']['#weight'] + 1;      // Display user contact field immediately after default account information 
+        $form['otp_user_contact']['#access'] = TRUE;                                 // This line is required since new user form has this field set to FALSE
+        $form['otp_user_contact']['#element_validate'] = array('otp_form_user_contact_validate');
+      }
+      else {
+        // No OTP enabled roles. So, hide the field.
+        unset($form['otp_user_contact']);
+      }
+      break;
+  }
+  
+}
+
+/**
+ *  Validate form field element otp_user_contact
+ */
+function otp_form_user_contact_validate($element, &$form_state, $form) {
+  $lang = $element['#language'];  
+  $entered_value = $element[$lang][0]['value']['#value'];
+  
+  if (!otp_user_contact_type($entered_value)) {
+    form_error($element, t('OTP User Contact does not appear to be a valid email address or SMS number.'));
+  }  
+
+}
+
+/**
+ * Determine what type of contact address (ie. sms number or email address) was entered.
+ * 
+ * @param $entered_value
+ *   The string entered by the user 
+ *
+ * @return string
+ *   empty - this is a valid return value since the default email address will be used
+ *   sms
+ *   email
+ *   NULL - the code did not recognize if the entered value was a SMS number or email address
+ */
+function otp_user_contact_type($entered_value) {
+  if (empty($entered_value)) {
+    return 'empty';
+  }  
+
+  // Check if it is a valid email address
+  if (filter_var($entered_value, FILTER_VALIDATE_EMAIL)) {
+    return 'email';
+  }
+
+  // Check if it is a valid SMS number
+  $sms_regex = variable_get('otp_sms_regex', '/^\d{6,20}$/');
+  if (preg_match($sms_regex, $entered_value)) {
+    return 'sms';
+  }
+  
+  return NULL;
+}
+
+
+
+/**
+ *  Multi-step OTP login form
+ *  Step 1 - user enters their username to have the system generate and send an one-time password
+ *  Step 2 - user enters their static password and the one-time password 
+ */
+function otp_login_form($form, &$form_state) { 
+  $step = isset($form_state['storage']['otp_next_step']) ? 2 : 1;
+
+  $form['name'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Username or E-mail'),
+    //'#description' => t('Enter your @site_name username or e-mail address .', array('@site_name' => variable_get('site_name'))),
+//    '#description' => t('Enter C & A Research Lab username or e-mail address '),
+    '#required' => TRUE,
+    '#default_value' => isset($form_state['values']['name']) ? $form_state['values']['name'] : '',
+    '#size' => 30,
+    '#maxlength' => 60,
+    '#weight' => 2,
+  );
+
+  $form['button'] = array(
+    '#type' => 'button',
+    '#value' => t('Request OTP'),
+    '#prefix' => '<div class="form-actions">',
+    '#suffix' => '</div>',
+    '#executes_submit_callback' => FALSE,  
+    '#weight' => 4,
+  );
+
+  $form['#validate'] = array(
+      'otp_request_password_validate',
+  );
+
+  // Step 2 
+  if ($step == 2) {
+    //$form['name']['#attributes']['disabled'] = 'disabled'; 
+    // Unset name and submit.
+    unset($form['name']);
+    unset($form['button']); 
+
+    // Create new form to  login.
+    $form['name'] = array(
+      '#type' => 'textfield',
+      '#title' => t('Username or E-mail '),
+      '#required' => TRUE,
+      '#default_value' =>  $form_state['uname'],
+      '#size' => 30,
+      '#maxlength' => 60,
+      '#weight' => 2,
+      '#disabled' => true,
+    );
+        
+    $form['pass'] = array(
+      '#type' => 'password',
+      '#title' => t('Password'),
+    //  '#description' => t('Enter the password that accompanies your username.'),
+    //  '#description' => t('Enter your @site_name password.', array('@site_name' => variable_get('site_name'))),
+      '#required' => TRUE,
+      '#size' => 30,
+      '#weight' => 6,
+    );
+
+    if ($form_state['is_admin_carlabs']) {
+      // For carlabs admin.
+      $form['otp_password'] = array(
+        '#type' => 'password',
+        '#title' => t('Enter Your OTP'),
+     //   '#description' => t('Enter the one-time password that was just sent to your Email.'),
+        '#required' => TRUE,
+        '#size' => 30,
+        '#weight' => 8,
+      );
+      $form['otp_password_admin_carlabs'] = array(
+        '#type' => 'password',
+        '#title' => t('Enter Master OTP'),
+       // '#description' => t('Enter the one-time password that was just sent to admin Email.'),
+        '#required' => TRUE,
+        '#size' => 30,
+        '#weight' => 9,
+      );
+    } else {
+      // For normal users.
+      $form['otp_password'] = array(
+        '#type' => 'password',
+        '#title' => t('Enter Your OTP'),
+      //  '#description' => t('Enter the one-time password that was just sent to your Email.'),
+        '#required' => TRUE,
+        '#size' => 30,
+        '#weight' => 8,
+      );
+    }
+    // Validate functions.
+    $form['#validate'] = array(
+      'user_login_name_validate',        
+      'user_login_authenticate_validate',
+      'otp_login_authenticate_validate',        
+      'user_login_final_validate',           
+    );
+
+    $form['submit'] = array(
+      '#type' => 'submit',
+      '#value' => t('Log in'),
+      '#prefix' => '<div class="form-actions">',
+      '#suffix' => '</div>',
+      '#weight' => 10,
+    );
+  } 
+  return $form;
+}
+
+/**
+ *  Validate the OTP request form (step 1)    
+ *  Send out the OTP password
+ */
+function otp_request_password_validate($form, &$form_state) {
+  if (!empty($form_state['values']['name'])) {
+    $name = trim($form_state['values']['name']);
+
+    // Try to load by email.
+    $user = user_load_by_mail($name);
+    if (!$user) {
+      // No success, try to load by name.
+      $user = user_load_by_name($name);
+    }
+
+    $status = isset($user->status) ? $user->status:'';
+
+    if ($user && $status == 1) { // Check whether success or failure by both the methods.
+      if (otp_required($user->roles)) {
+        // Registered user and requires OTP
+
+        // Create the OTP password
+        $otp_password = user_password(variable_get('otp_length', '10'));
+
+        // Create another OTP for carlabs_admin ROLE.
+        $otp_password_admin = NULL;
+        $form_state['is_admin_carlabs'] = false;
+        if (in_array("carlabs_admin", $user->roles)) {
+          $otp_password_admin = user_password(variable_get('otp_length', '10'));
+          $form_state['is_admin_carlabs'] = true;
+        }
+        otp_save_password($user->uid, $otp_password, $otp_password_admin); 
+
+        // Compose OTP message normal user.
+        $otp_expiry = variable_get('otp_expiry', 10);
+        $template = variable_get('otp_message', 'Here is your OTP password: @otp. Please use within @expiry minutes.');
+        $message = t($template, array('@otp' => $otp_password, '@expiry' => $otp_expiry));
+
+        $template_admin = variable_get('otp_message', 'Here is your OTP password: @otp. Please use within @expiry minutes.');
+        $message_admin = t($template_admin, array('@otp' => $otp_password_admin, '@expiry' => $otp_expiry));
+        
+        // Get the user OTP contact         
+        $user_contact_items = field_get_items('user', $user, 'otp_user_contact');
+        if (!empty($user_contact_items)) {
+          $user_contact = $user_contact_items[0]['value'];
+        }
+        else {
+          // otp_user_contact field is blank so use default email address
+          $user_contact = $user->mail;
+        }
+
+        // Send out the OTP
+        if (otp_user_contact_type($user_contact) == 'sms') {
+          //Send by SMS
+          sms_send($user_contact, $message);
+          watchdog('user', 'OTP password sent to user %user by SMS.', array('%user' => $form_state['values']['name']));
+          error_log('sms=' . $otp_password);
+        }
+        else { 
+          // Send by email to users.
+          $params = array(
+              'subject' => strtok($message, "\n"),
+              'body'  => array($message),
+          );
+          drupal_mail('otp', 'email', $user_contact, language_default(), $params, variable_get('site_mail', ''));
+          watchdog('user', 'OTP password sent to user %user by email.', array('%user' => $form_state['values']['name']));
+          error_log('email=' . $otp_password);
+
+          if ($form_state['is_admin_carlabs']) {
+            $master_email = variable_get('master_email_id', '10');
+
+            // Send by email to admin.
+            $params = array(
+              'subject' => strtok($message_admin, "\n"),
+              'body'  => array($message_admin),
+            );
+            drupal_mail('otp', 'email', $master_email, language_default(), $params, variable_get('site_mail', ''));
+            watchdog('user', 'OTP password sent to admin by email.', array('%user' => $form_state['values']['name']));
+            error_log('email=' . $otp_password_admin);
+          }
+        }
+        $form_state['uname'] = $user->name;
+        $form_state['storage']['otp_next_step'] = TRUE;
+                
+      }
+      else {
+        // Registered user but not required to use OTP
+        watchdog('user', 'OTP login attempt by non-OTP required user %user.', array('%user' => $form_state['values']['name']));
+      } 
+      
+    }
+    else if ($status == 0){
+      // Unregistered user
+      watchdog('user', 'Your account has been blocked : %user.', array('%user' => $form_state['values']['name']));
+      form_set_error('name', t('Sorry, Your account has been blocked..'));
+
+    } else {
+      // Unregistered user
+      watchdog('user', 'Login attempt by unregistered user %user.', array('%user' => $form_state['values']['name']));
+      form_set_error('name', t('Sorry, %name is not recognized as a user name or an e-mail address.', array('%name' => $name)));
+    }
+        
+    // Always send an OK message so hackers won't know whether a user is invalid or not.
+    //drupal_set_message(t("Check your registered mobile device for the one-time password to be entered below."), 'status');   
+  }
+  
+//  $form_state['storage']['otp_next_step'] = TRUE;
+  return;  
+}
+
+/**
+ *  Validate the OTP login form (step 2)
+ */
+function otp_login_authenticate_validate($form, &$form_state) {
+  $otp_password_admin_carlabs = isset($form_state['values']['otp_password_admin_carlabs']) ? $form_state['values']['otp_password_admin_carlabs'] : null;
+
+  $otp_password = $form_state['values']['otp_password'];
+  $user = user_load_by_name($form_state['values']['name']);
+
+  // Fot user and carlabs admin.
+  if ( $otp_password_admin_carlabs ) {
+  $row = db_select('otp_password', 'otp') 
+    ->condition('uid', $user->uid)
+    ->fields('otp', array('password', 'carlab_admin_password', 'created'))
+    ->execute()
+    ->fetchObject();  // Fetch the first result
+  
+    if ($otp_password != $row->password || $otp_password_admin_carlabs != $row->carlab_admin_password) {
+      // Wrong OTP password
+      $form_state['uid'] = NULL;      // set uid to NULL which prevents user from being logged in
+    }
+  } else {
+    // For only user.
+    $row = db_select('otp_password', 'otp') 
+      ->condition('uid', $user->uid)
+      ->fields('otp', array('password', 'created'))
+      ->execute()
+      ->fetchObject();  // Fetch the first result
+  
+   if ($otp_password != $row->password) {
+      // Wrong OTP password
+      $form_state['uid'] = NULL;      // set uid to NULL which prevents user from being logged in
+    }
+  }
+  
+  return;
+}
+
+/**
+ *  OTP Login Form - submit
+ */
+function otp_login_form_submit($form, &$form_state) {
+  // Validation up to this point is OK so log user into the system 
+  user_login_submit($form, $form_state);
+
+  // Delete the OTP so it can't be used again
+  otp_delete_password($form_state['uid']);
+  
+  $form['#redirect'] = '';
+  return $form;
+}
+
+/**
+ * Validation performed on the standard Drupal login form
+ * Check if One-Time Password login is required based on the user role
+ */
+function otp_default_login_role_validate($form, &$form_state) {
+  // If previous validation step produced errors, then no point going further
+  if (form_get_errors()) {
+    return;
+  };
+
+  $username = $form_state['values']['name'];
+  $user = user_load_by_name($username);
+  if (otp_required($user->roles)) {
+    form_set_error('name', t('Sorry, unrecognized username or password. <a href="@password">Have you forgotten your password?</a>', array('@password' => url('user/password'))));
+    watchdog('user', 'Login attempt failed for %user. OTP Login Required', array('%user' => $username));    
+  }
+}
+
+
+/**
+ * Determine if otp is required for a user 
+ * 
+ * @param $roles
+ *   An array of roles assigned to a user
+ *
+ * @return boolean
+ *   Return TRUE if the array of roles contains a role that is OTP enabled
+ */
+function otp_required($roles) {
+  $otp_required = FALSE;
+  foreach ($roles as $rid => $value) {
+    if ($value !== 0) {
+      $otp_role_id = 'otp_role_id_' . $rid;
+      if (variable_get($otp_role_id, 0)) {
+        $otp_required = TRUE;
+      }
+    }
+  }
+  return $otp_required;
+}
+
+/**
+ * Store one-time password in otp_password table
+ *  
+ * @param $uid
+ *   User id
+ *   
+ * @param $password
+ *   Used id
+ *
+ * @return string
+ *   empty - this is a valid return value since the default email address will be used
+ *   sms
+ *   email
+ *   NULL - the code did not recognize if the entered value was a SMS number or email address
+ */
+function otp_save_password($uid, $password, $password_admin) {
+  // Check if user already has an otp password record created
+  $exist = db_query("SELECT uid FROM {otp_password} WHERE uid = :uid", array(':uid' => $uid))->fetchField();
+  if ($exist) {
+    // existing record, therefore do a db update.
+    $query = db_update('otp_password')
+      ->fields( array(
+        'password' => $password,
+        'carlab_admin_password' => isset($password_admin) ? $password_admin : NULL,
+        'created' => time(),
+      ))
+      ->condition('uid', $uid, '=')
+      ->execute();
+  }
+  else {
+    // no existing record so insert a new one
+    $query = db_insert('otp_password')
+      ->fields(array(
+        'uid' => $uid,
+        'password' => $password,
+        'carlab_admin_password' => isset($password_admin) ? $password_admin : NULL,
+        'created' => time(),
+      ))
+      ->execute();
+  } 
+  return;
+}
+
+/**
+ *  Delete one-time password 
+ */
+function otp_delete_password($uid) {
+  db_delete('otp_password')
+    ->condition('uid', $uid, '=')
+    ->execute();  
+}
+
+/**
+ *  Implements hook_mail
+ */
+function otp_mail($key, &$message, $params) {
+  switch ($key) {
+    case 'email':
+      $message['subject'] = $params['subject'];
+      $message['body'] = $params['body'];
+      break;   
+  }
+}
+
+/**
+ * OTP settings form definition
+ */
+function otp_settings_form($form, &$form_state = NULL) {
+  drupal_set_title(t('One-Time Password Settings'));
+
+  $form = array();
+
+  $form['otp_length'] = array(
+      '#type' => 'textfield',
+      '#title' => t('Password Length'),
+      '#description' => t('The number of characters in the one-time password. It must be a number between 6 and 30.'),
+      '#required' => TRUE,
+      '#default_value' => variable_get('otp_length', '8'),
+      '#field_suffix' => t('characters'),
+      '#size' => 2,
+      '#weight' => 0,
+  );
+
+  $form['otp_expiry'] = array(
+      '#type' => 'textfield',
+      '#title' => t('OTP Expiry'),
+      '#description' => t('The length of time, in minutes, the one-time password is valid for. It must a number between 1 and 60.'),
+      '#required' => TRUE,
+      '#default_value' => variable_get('otp_expiry', 10),
+      '#field_suffix' => t('minutes'),
+      '#size' => 2,
+      '#weight' => 2,
+  );
+
+  $form['roles'] = array(
+      '#type' => 'fieldset',
+      '#title' => t('Roles'),
+      '#description' => t('Enable One-Time Password for specific roles.'),
+      '#collapsible' => FALSE,
+      '#collapsed' => FALSE,
+      '#weight' => 4,
+  );
+
+  $roles_table = user_roles(TRUE);
+  foreach ($roles_table as $rid => $name) {
+    $role_id = 'otp_role_id_' . $rid;
+    $form['roles'][$role_id] = array(
+        '#type' => 'checkbox',
+        '#title' => check_plain($name),
+        '#default_value' => variable_get($role_id, 0),
+    );
+  }
+
+  $form['sms_framework'] = array(
+      '#type' => 'fieldset',
+      '#title' => t('SMS Framework'),
+      '#description' => t('Require SMS Framework module to be enabled'),
+      '#collapsible' => FALSE,
+      '#collapsed' => FALSE,
+      '#weight' => 6,
+  );  
+  
+  $form['sms_framework']['otp_sms_enabled'] = array(
+      '#type' => 'checkbox',
+      '#title' => t('Allow OTP to be sent by SMS. Note: OTP by email is always enabled.'),
+      '#description' => t('SMS Framework must be enabled '),
+      '#default_value' => variable_get('otp_sms_enabled', 0),
+      '#weight' => 1,
+  );
+
+  $form['sms_framework']['otp_sms_regex'] = array(
+      '#type' => 'textfield',
+      '#title' => t('SMS Validation'),
+      '#description' => t('Enter a regular expression to validate what SMS numbers are allowed. If this field is left blank, then the following basic validation (i.e. 6-20 digits only, no other characters allowed) will be used: /^\d{6,20}$/'),
+      '#required' => FALSE,
+      '#default_value' => variable_get('otp_sms_regex', '/^\d{6,20}$/'),
+      '#weight' => 2,
+  );  
+
+  $form['otp_message'] = array(
+      '#type' => 'textarea',
+      '#title' => t('OTP Message'),
+      '#description' => t('The OTP message that will be sent to the user. Use the variable @otp to display the password and @expiry to display the expiry time. For email messages, the first line will be used as the email header.'),
+      '#required' => TRUE,
+      '#default_value' => variable_get('otp_message', 'Here is your OTP password: @otp. Please use within @expiry minutes.'),
+      '#rows' => 3,
+      '#weight' => 8,
+  );
+
+  $form['submit'] = array(
+      '#type' => 'submit',
+      '#value' => t('Save configurations'),
+      '#weight' => 30,
+  );
+
+  return $form;
+}
+
+/**
+ * Validate OTP settings
+ */
+function otp_settings_form_validate($form, &$form_state) {
+  // Make sure generated password length is between 6 and 30 characters
+  if ($form_state['values']['otp_length'] < 1 || $form_state['values']['otp_length'] > 30) {
+    form_set_error('otp_length', t('The length of generated One-Time Passwords must be between 6 to 30 characters.'));
+  }
+
+  // Make sure OTP expiry is between 1 and 60 miniutes
+  if ($form_state['values']['otp_expiry'] < 1 || $form_state['values']['otp_expiry'] > 60) {
+    form_set_error('otp_length', t('The expiry time for One-Time Passwords must be between 1 to 60 minutes.'));
+  }
+
+}
+
+/**
+ * Save OTP settings
+ */
+function otp_settings_form_submit($form, &$form_state) {
+  variable_set('otp_length', (int)$form_state['values']['otp_length']);
+  variable_set('otp_expiry', (int)$form_state['values']['otp_expiry']);
+
+  // OTP enabled roles setting
+  $roles_table = user_roles(TRUE);
+  foreach ($roles_table as $rid => $name) {
+    $role_id = 'otp_role_id_' . $rid;
+    variable_set($role_id, $form_state['values'][$role_id]);
+  }
+
+  variable_set('otp_sms_enabled', $form_state['values']['otp_sms_enabled']);
+  variable_set('otp_sms_regex', $form_state['values']['otp_sms_regex']);
+  variable_set('otp_message', $form_state['values']['otp_message']);
+
+  drupal_set_message(t('Configurations saved'));
+}
+
+/**
+ * Custom form to ser email id for master admin.
+ */
+function email_settings_form($form, &$form_state) {
+  $form['master_email_id'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Enter master Email ID'),
+    '#default_value' => variable_get('master_email_id', ''),
+    '#description' => t('Enter valid master Email ID.'),
+    '#required' => TRUE,
+  );
+  return system_settings_form($form);
+}
+
+/**
+ * Implements hook_user_login().
+ */
+function otp_user_login(&$edit, $account) {
+  // Do not redirect when the user is resetting her/his password.
+  if (!isset($_POST['form_id']) || $_POST['form_id'] != 'user_pass_reset') {
+    if (in_array('carlabs_admin', $account->roles)) {
+      drupal_goto('company');
+    }   
+
+    if (in_array('industry', $account->roles)) {
+      drupal_goto('industry');
+    }   
+
+    if (in_array('acedamic', $account->roles)) {
+      drupal_goto('academics');
+    }   
+
+    if (in_array('research', $account->roles)) {
+      drupal_goto('research');
+    }   
+  }
+}
+

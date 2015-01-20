@@ -1,0 +1,8 @@
+name = OTP
+description = "One Time Password"
+package = carlabs
+configure = admin/config/people/otp
+core = 7.x
+php = 5.3
+files[] = otp.install
+files[] = otp.module

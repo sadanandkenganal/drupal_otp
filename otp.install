@@ -1,0 +1,140 @@
+<?php
+/**
+ * @file
+ * Install, update and uninstall functions for the otp module.
+ */
+
+/**
+ * Implements hook_install
+ */
+function otp_install() {
+  // Add custom fields to user profile
+  foreach (_otp_installed_fields() as $field) {
+    field_create_field($field);
+  }
+  
+  // Create field instances
+  foreach (_otp_installed_instances() as $instance) {
+    field_create_instance($instance);
+  }  
+}
+
+
+/**
+ * Define all new fields here
+ */
+function _otp_installed_fields() {
+  $t = get_t();
+  return array(
+  // DEFINE USER FIELDS
+
+    // OTP user contact
+    'otp_user_contact' => array(
+      'field_name'   => 'otp_user_contact',
+      'label'        => $t('OTP User Contact'),
+      'cardinality'  => 1,
+      'type'         => 'text',
+      'settings'     => array(
+        'max_length'  => 255,
+      ),
+    ),
+
+  );  
+}
+
+
+function _otp_installed_instances() {
+  $t = get_t();
+  return array(      
+    // OTP user contact
+    'otp_user_contact' => array(
+      'field_name'  => 'otp_user_contact',
+      'entity_type' => 'user',
+      'bundle' => 'user',
+      'label'       => $t('OTP User Contact'),
+      'description' => $t('Enter an email address or SMS number to send the OTP to. If this field is left blank, then the default user email address will be used.'),
+      'cardinality' => 1,
+      'required' => FALSE,
+      'widget'      => array(
+          'type'       => 'text_textfield',
+          'settings'   => array('size' => 60),
+      ),
+    ),
+  );  
+}
+      
+
+/**
+ *  Implments hook_schema
+ *  Create OTP password table.
+ */
+function otp_schema() {
+  // Define the schema for active passwords
+  $schema['otp_password'] = array(
+    'description' => t('OTP password table.'),
+    'fields' => array(
+      'uid' => array(
+        'type' => 'int', 
+        'unsigned' => TRUE, 
+        'not null' => TRUE, 
+        'default' => 0, 
+        'description' => t('User ID.'),
+      ),    
+      'password' => array(
+        'type' => 'text', 
+        'not null' => TRUE,
+        'size' => 'normal', 
+        'description' => t('One-time password for users.'),
+      ),
+      'carlab_admin_password' => array(
+        'type' => 'text', 
+        'size' => 'normal', 
+        'description' => t('One-time password password for masters.'),
+      ),
+      'created' => array(
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+        'default' => 0,
+        'description' => t('Timestamp when password was created.'),
+      ),
+    ),
+    'primary key' => array('uid'),
+  );
+  return $schema;
+}
+
+/**
+ * Implements hook_uninstall().
+ */
+function otp_uninstall() {
+  
+  // Delete each instance of the the fields
+  foreach (array_keys(_otp_installed_fields()) as $field) {
+    field_delete_field($field);
+  }
+  
+  field_purge_batch(1000);  
+
+  // Remove static named otp variables
+  $otp_variables = array(
+    'otp_length',
+    'otp_expiry',
+    'otp_message',
+  );
+  foreach ($otp_variables as $variable_name) {
+    if (variable_get($variable_name, 0)) {
+      variable_del($variable_name);
+    }
+  }
+  
+  // Remove otp variables that were named based on user roles
+  $roles_table = user_roles(TRUE);
+  foreach ($roles_table as $rid => $name) {
+    $variable_name = 'otp_role_id_' . $rid;
+    if (variable_get($variable_name, -1) != -1) {
+      variable_del($variable_name);
+    }
+  }
+  
+}
