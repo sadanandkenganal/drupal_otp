@@ -44,34 +44,7 @@ function otp_menu() {
   );      
   
   // OTP Login
-  $items['company/login'] = array(
-    'title' => 'Company Login',
-    'description' => 'Login using a one time password.',  
-    'page callback' => 'drupal_get_form',
-    'page arguments' => array('otp_login_form'),
-    'access arguments' => array('login links'),
-  );
-
-  // OTP Login
-  $items['industry/login'] = array(
-    'title' => 'Industry Login',
-    'description' => 'Login using a one time password.',  
-    'page callback' => 'drupal_get_form',
-    'page arguments' => array('otp_login_form'),    
-    'access arguments' => array('login links'),
-  );
-
-  // OTP Login
-  $items['research/login'] = array(
-    'title' => 'Research Login',
-    'description' => 'Login using a one time password.',  
-    'page callback' => 'drupal_get_form',
-    'page arguments' => array('otp_login_form'),    
-    'access arguments' => array('login links'),
-  );
-
-  // OTP Login
-  $items['academia/login'] = array(
+  $items['otp/login'] = array(
     'title' => 'Academic Login',
     'description' => 'Login using a one time password.',  
     'page callback' => 'drupal_get_form',
